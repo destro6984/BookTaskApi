@@ -10,6 +10,8 @@ from flask_restful import Api, Resource
 from flask_sqlalchemy import SQLAlchemy
 from marshmallow import INCLUDE
 from marshmallow_sqlalchemy.fields import Nested
+from sqlalchemy import desc, asc, and_
+from sqlalchemy.sql.elements import or_
 
 import config
 
@@ -99,6 +101,21 @@ class Book(db.Model):
     def find_book(cls, gb_api_id=None):
         return cls.query.filter_by(googlebooks_api_id=gb_api_id).first()
 
+    @classmethod
+    def order_by_published_date(cls, sort_parm):
+        filed_sortby = sort_parm.lstrip('-+')
+        result = cls.query.order_by(desc(filed_sortby)).all()
+        if sort_parm.startswith('-'):
+            result = cls.query.order_by(asc(filed_sortby)).all()
+        return result
+
+    @classmethod
+    def filter_by_authors(cls, auhtors_list):
+        # https://stackoverflow.com/questions/66373427/how-do-i-pass-multiple-parameters-from-list-in-sqlalchemy-filter-statement
+        # result=Book.query.filter(or_(*[Book.authors.any(Author.name.contains(name)) for name in authors_list])).all()
+        result = Book.query.filter((Book.authors.any(Author.name.in_(auhtors_list)))).all()
+        return result
+
 
 class BookSchema(ma.SQLAlchemyAutoSchema):
     authors = fields.List(fields.Nested(lambda: AuthorSchema(only=("name",))))
@@ -138,7 +155,18 @@ categories_schema = CategorySchema(many=True)
 class GoogleBookApiList(Resource):
     def get(self):
         books_db = Book.query.all()
-        return books_schema.dump(books_db)
+        sort_q = request.args.get('sort')
+        published_q = request.args.get("published_date")
+        authors_q = request.args.getlist("author")
+        if sort_q:
+            books_db = Book.order_by_published_date(sort_q)
+        elif published_q:
+            books_db = Book.query.filter(Book.published_date.contains(published_q)).all()
+        elif authors_q:
+            books_db = Book.filter_by_authors(authors_q)
+        if not books_db:
+            return {"message": f"No result for such criteria: {[request.args.get(key) for key in request.args]}"}, 400
+        return books_schema.dump(books_db).data
 
 
 class GoogleBookApiBook(Resource):
@@ -176,7 +204,7 @@ class GoogleBookApiLoad(Resource):
                 existed_book.categories = categories_list if categories_list else existed_book.categories
             else:
                 new_book = Book(googlebooks_api_id=book_data.get('id'), title=book_data.get('volumeInfo').get('title'),
-                                published_date=book_data.get('volumeInfo').get('publishedDate'), )
+                                published_date=book_data.get('volumeInfo').get('publishedDate'))
                 new_book.authors.extend(authors_list)
                 new_book.categories.extend(categories_list)
                 books_to_db.append(new_book)
@@ -206,6 +234,7 @@ def bootstrap_data():
     """Populates database with data"""
     db.drop_all()
     db.create_all()
+
     """testdata"""
 
     db.session.commit()
