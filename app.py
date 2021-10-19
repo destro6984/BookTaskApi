@@ -1,5 +1,3 @@
-import datetime
-import json
 
 import requests
 
@@ -8,10 +6,9 @@ from flask_marshmallow import Marshmallow
 from flask_marshmallow.fields import fields
 from flask_restful import Api, Resource
 from flask_sqlalchemy import SQLAlchemy
-from marshmallow import INCLUDE
-from marshmallow_sqlalchemy.fields import Nested
-from sqlalchemy import desc, asc, and_
-from sqlalchemy.sql.elements import or_
+from marshmallow import INCLUDE, ValidationError, pprint, pre_load
+
+from sqlalchemy import desc, asc
 
 import config
 
@@ -37,7 +34,7 @@ categories = db.Table('categories',
 
 class Author(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(), nullable=False)
+    name = db.Column(db.String(80),unique=True, nullable=False)
 
     @classmethod
     def find_by_name(cls, name):
@@ -125,10 +122,11 @@ class BookSchema(ma.SQLAlchemyAutoSchema):
         model = Book
         load_instance = True
         include_relationships = True
+        unknown = INCLUDE
 
 
 class AuthorSchema(ma.SQLAlchemyAutoSchema):
-    books = fields.List(fields.Nested(BookSchema(exclude=("authors",))))
+    books = fields.Nested(BookSchema(exclude=("authors",), many=True))
 
     class Meta:
         model = Author
@@ -137,7 +135,7 @@ class AuthorSchema(ma.SQLAlchemyAutoSchema):
 
 
 class CategorySchema(ma.SQLAlchemyAutoSchema):
-    books = fields.List(fields.Nested(BookSchema(exclude=("categories",))))
+    books = fields.Nested(BookSchema(exclude=("categories",), many=True))
 
     class Meta:
         model = Category
@@ -165,10 +163,9 @@ class GoogleBookApiList(Resource):
         elif authors_q:
             books_db = Book.filter_by_authors(authors_q)
         if not books_db:
-            return {"message": f"No result for such criteria: {[request.args.get(key) for key in request.args]}"}, 400
+            return {
+                       "message": f"No result for such criteria: {[request.args.getlist(value) for value in request.args]}"}, 400
         return books_schema.dump(books_db)
-
-
 
 
 class GoogleBookApiBook(Resource):
@@ -179,7 +176,6 @@ class GoogleBookApiBook(Resource):
 
 class GoogleBookApiLoad(Resource):
     def post(self):
-
         data = request.get_json()
         if not data:
             return {"message": "No input data provided"}, 400
@@ -216,17 +212,16 @@ class GoogleBookApiLoad(Resource):
                 new_book.authors.extend(authors_list)
                 new_book.categories.extend(categories_list)
                 books_to_db.append(new_book)
-        try:
-            db.session.add_all(books_to_db)
-            db.session.commit()
-        except Exception as exc:
-            return {"message": exc}, 400
+
+        db.session.add_all(books_to_db)
+        db.session.commit()
+
         return books_schema.dump(books_to_db)
 
 
-api.add_resource(GoogleBookApiBook, '/api/books/<int:id>', endpoint="booksid")
-api.add_resource(GoogleBookApiList, '/api/', '/books', endpoint="books")
-api.add_resource(GoogleBookApiLoad, '/api/db', endpoint='to_db')
+api.add_resource(GoogleBookApiBook, '/books/<int:id>', endpoint="booksid")
+api.add_resource(GoogleBookApiList, '/books', endpoint="booksall")
+api.add_resource(GoogleBookApiLoad, '/db', endpoint='to_db')
 
 
 @app.route('/home', methods=['GET', 'POST'])
@@ -246,7 +241,6 @@ def reset_db():
 @app.cli.command("bootstrap")
 def bootstrap_data():
     """Populates database with data"""
-
 
     """testdata"""
 
