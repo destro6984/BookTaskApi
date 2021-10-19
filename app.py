@@ -3,7 +3,7 @@ import json
 
 import requests
 
-from flask import Flask, request
+from flask import Flask, request, jsonify, render_template
 from flask_marshmallow import Marshmallow
 from flask_marshmallow.fields import fields
 from flask_restful import Api, Resource
@@ -55,7 +55,7 @@ class Author(db.Model):
         return author
 
     def __repr__(self):
-        return f"Author:{self.name}"
+        return f"Author:{self.name}, Books: {[book.title for book in self.books]}"
 
 
 class Category(db.Model):
@@ -145,7 +145,7 @@ class CategorySchema(ma.SQLAlchemyAutoSchema):
         include_relationships = True
 
 
-book_schema = BookSchema()
+book_schema = BookSchema(exclude=("googlebooks_api_id", "id",))
 books_schema = BookSchema(many=True)
 
 category_schema = CategorySchema()
@@ -166,17 +166,20 @@ class GoogleBookApiList(Resource):
             books_db = Book.filter_by_authors(authors_q)
         if not books_db:
             return {"message": f"No result for such criteria: {[request.args.get(key) for key in request.args]}"}, 400
-        return books_schema.dump(books_db).data
+        return books_schema.dump(books_db)
+
+
 
 
 class GoogleBookApiBook(Resource):
     def get(self, id):
         book_db = Book.query.get_or_404(id, description="Book Not found,please check the id")
-        return book_schema.dump(book_db)
+        return book_schema.dump(book_db), 200
 
 
 class GoogleBookApiLoad(Resource):
     def post(self):
+
         data = request.get_json()
         if not data:
             return {"message": "No input data provided"}, 400
@@ -202,9 +205,14 @@ class GoogleBookApiLoad(Resource):
                 existed_book.ratings_count = book_data.get('volumeInfo').get("ratingsCount", existed_book.ratings_count)
                 existed_book.authors = authors_list if authors_list else existed_book.authors
                 existed_book.categories = categories_list if categories_list else existed_book.categories
+                books_to_db.append(existed_book)
             else:
                 new_book = Book(googlebooks_api_id=book_data.get('id'), title=book_data.get('volumeInfo').get('title'),
-                                published_date=book_data.get('volumeInfo').get('publishedDate'))
+                                published_date=book_data.get('volumeInfo').get('publishedDate'),
+                                thumbnail=book_data.get('volumeInfo').get('imageLinks', {}).get("thumbnail"),
+                                average_rating=book_data.get('volumeInfo').get("averageRating"),
+                                ratings_count=book_data.get('volumeInfo').get("ratingsCount")
+                                )
                 new_book.authors.extend(authors_list)
                 new_book.categories.extend(categories_list)
                 books_to_db.append(new_book)
@@ -216,9 +224,15 @@ class GoogleBookApiLoad(Resource):
         return books_schema.dump(books_to_db)
 
 
-api.add_resource(GoogleBookApiBook, '/books/<int:id>')
-api.add_resource(GoogleBookApiList, '/', '/books')
-api.add_resource(GoogleBookApiLoad, '/db')
+api.add_resource(GoogleBookApiBook, '/api/books/<int:id>', endpoint="booksid")
+api.add_resource(GoogleBookApiList, '/api/', '/books', endpoint="books")
+api.add_resource(GoogleBookApiLoad, '/api/db', endpoint='to_db')
+
+
+@app.route('/home', methods=['GET', 'POST'])
+@app.route('/', methods=['GET', 'POST'])
+def home():
+    return render_template("layout.html")
 
 
 @app.cli.command("initdb")
@@ -232,8 +246,7 @@ def reset_db():
 @app.cli.command("bootstrap")
 def bootstrap_data():
     """Populates database with data"""
-    db.drop_all()
-    db.create_all()
+
 
     """testdata"""
 
