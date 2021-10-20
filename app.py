@@ -1,4 +1,3 @@
-
 import requests
 
 from flask import Flask, request, jsonify, render_template
@@ -7,8 +6,10 @@ from flask_marshmallow.fields import fields
 from flask_restful import Api, Resource
 from flask_sqlalchemy import SQLAlchemy
 from marshmallow import INCLUDE, ValidationError, pprint, pre_load
+from marshmallow_sqlalchemy import auto_field
 
 from sqlalchemy import desc, asc
+from sqlalchemy.exc import IntegrityError
 
 import config
 
@@ -34,7 +35,7 @@ categories = db.Table('categories',
 
 class Author(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(80),unique=True, nullable=False)
+    name = db.Column(db.String(80), unique=True, nullable=False)
 
     @classmethod
     def find_by_name(cls, name):
@@ -57,7 +58,7 @@ class Author(db.Model):
 
 class Category(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    type = db.Column(db.String(), nullable=False)
+    type = db.Column(db.String(80), nullable=False)
     books = db.relationship('Book', secondary=categories, lazy='subquery',
                             backref=db.backref('categories', lazy=True))
 
@@ -67,7 +68,7 @@ class Category(db.Model):
 
     @classmethod
     def find_or_create(cls, book_type):
-        existed_category = Category.find_by_type(book_type)
+        existed_category = cls.find_by_type(book_type)
         if existed_category:
             category = existed_category
         else:
@@ -83,7 +84,7 @@ class Category(db.Model):
 class Book(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     googlebooks_api_id = db.Column(db.String(70), nullable=False, unique=True)
-    title = db.Column(db.String(), nullable=False)
+    title = db.Column(db.String(120), nullable=False)
     published_date = db.Column(db.String(20))
     average_rating = db.Column(db.Integer)
     ratings_count = db.Column(db.Integer)
@@ -110,13 +111,13 @@ class Book(db.Model):
     def filter_by_authors(cls, auhtors_list):
         # https://stackoverflow.com/questions/66373427/how-do-i-pass-multiple-parameters-from-list-in-sqlalchemy-filter-statement
         # result=Book.query.filter(or_(*[Book.authors.any(Author.name.contains(name)) for name in authors_list])).all()
-        result = Book.query.filter((Book.authors.any(Author.name.in_(auhtors_list)))).all()
+        result = cls.query.filter((cls.authors.any(Author.name.in_(auhtors_list)))).all()
         return result
 
 
 class BookSchema(ma.SQLAlchemyAutoSchema):
-    authors = fields.List(fields.Nested(lambda: AuthorSchema(only=("name",))))
-    categories = fields.List(fields.Nested(lambda: CategorySchema(only=("type",))))
+    authors = fields.Nested(lambda: AuthorSchema(only=("name",), many=True))
+    categories = fields.Nested(lambda: CategorySchema(only=("type",), many=True))
 
     class Meta:
         model = Book
@@ -143,7 +144,7 @@ class CategorySchema(ma.SQLAlchemyAutoSchema):
         include_relationships = True
 
 
-book_schema = BookSchema(exclude=("googlebooks_api_id", "id",))
+book_schema = BookSchema()
 books_schema = BookSchema(many=True)
 
 category_schema = CategorySchema()
@@ -165,7 +166,7 @@ class GoogleBookApiList(Resource):
         if not books_db:
             return {
                        "message": f"No result for such criteria: {[request.args.getlist(value) for value in request.args]}"}, 400
-        return books_schema.dump(books_db)
+        return BookSchema(exclude=("id", "googlebooks_api_id",), many=True).dump(books_db)
 
 
 class GoogleBookApiBook(Resource):
